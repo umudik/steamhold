@@ -85,12 +85,6 @@ del /f /q "C:\Program Files (x86)\Steam\steamapps\common\<installdir>"
 - Antivirus software may flag process-stopping + ACL changes. The source is small and readable — review it before running.
 - Blocks apply to the Windows user who installed the service.
 
-## Roadmap
-
-- Optional “Buy Me a Coffee” support link
-- Tray UI
-- Block by AppID even when the game was never installed (manual installdir)
-
 ## License
 
 MIT — see [LICENSE](LICENSE).
