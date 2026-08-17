@@ -5,6 +5,7 @@
 
 .EXAMPLE
   .\steamhold.ps1
+  .\steamhold.ps1 ui
   .\steamhold.ps1 list
   .\steamhold.ps1 block 570
   .\steamhold.ps1 unblock "Dota 2"
@@ -15,8 +16,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('menu', 'list', 'block', 'unblock', 'status', 'install', 'uninstall', 'sweep')]
-    [string]$Command = 'menu',
+    [ValidateSet('ui', 'menu', 'list', 'block', 'unblock', 'status', 'install', 'uninstall', 'sweep')]
+    [string]$Command = 'ui',
 
     [Parameter(Position = 1)]
     [string]$Target,
@@ -32,10 +33,11 @@ $lib = Join-Path $PSScriptRoot 'lib'
 . (Join-Path $lib 'Block.ps1')
 . (Join-Path $lib 'Service.ps1')
 . (Join-Path $lib 'Menu.ps1')
+. (Join-Path $lib 'Ui.ps1')
 
 switch ($Command) {
-    'menu' {
-        Start-SteamHoldMenu
+    { $_ -in @('ui', 'menu') } {
+        Start-SteamHoldUi
     }
     'list' {
         Show-SteamHoldLibrary | Out-Null
