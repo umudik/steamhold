@@ -20,31 +20,15 @@ function Lock-SteamPath {
         Write-SteamHoldLog "removed folder before lock: $Path"
     }
 
-    $fresh = -not (Test-Path -LiteralPath $Path)
-    if ($fresh) {
+    if (-not (Test-Path -LiteralPath $Path)) {
         Set-Content -LiteralPath $Path -Value 'steamhold: this path is locked on purpose.' -Encoding ASCII
-    }
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        return
+        Write-SteamHoldLog "locked: $Path"
     }
 
-    $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-    try {
-        $acl = Get-Acl -LiteralPath $Path
-        $hasDeny = $acl.Access | Where-Object {
-            $_.AccessControlType -eq 'Deny' -and $_.IdentityReference.Value -eq $me
-        }
-        if (-not $hasDeny) {
-            (Get-Item -LiteralPath $Path -Force).Attributes = 'ReadOnly,Hidden,System'
-            $acl.SetAccessRuleProtection($true, $false)
-            $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($me, 'Read', 'Allow')))
-            $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
-                        $me, 'Write,Delete,ChangePermissions,TakeOwnership', 'Deny')))
-            Set-Acl -LiteralPath $Path -AclObject $acl
-            Write-SteamHoldLog "$(if ($fresh) { 'locked' } else { 're-locked' }): $Path"
-        }
-    } catch {
-        Write-SteamHoldLog "lock acl skipped: $Path ($($_.Exception.Message))"
+    if (Test-Path -LiteralPath $Path -PathType Leaf) {
+        try {
+            (Get-Item -LiteralPath $Path -Force).Attributes = 'ReadOnly,Hidden'
+        } catch { }
     }
 }
 
@@ -52,7 +36,7 @@ function Unlock-SteamPath {
     param([Parameter(Mandatory = $true)][string]$Path)
 
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        return $false
+        return $true
     }
 
     try {
@@ -60,14 +44,18 @@ function Unlock-SteamPath {
     } catch { }
 
     try {
-        $acl = Get-Acl -LiteralPath $Path
-        $acl.SetAccessRuleProtection($false, $true)
+        $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+        $changed = $false
         foreach ($rule in @($acl.Access)) {
             if ($rule.AccessControlType -eq 'Deny') {
                 [void]$acl.RemoveAccessRule($rule)
+                $changed = $true
             }
         }
-        Set-Acl -LiteralPath $Path -AclObject $acl
+        if ($changed) {
+            $acl.SetAccessRuleProtection($false, $true)
+            Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+        }
     } catch { }
 
     try {
@@ -78,6 +66,40 @@ function Unlock-SteamPath {
         Write-SteamHoldLog "unlock failed: $Path ($($_.Exception.Message))"
         return $false
     }
+}
+
+function Start-SteamHoldElevatedUnlock {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Paths
+    )
+    $list = ($Paths | ForEach-Object { $_.Replace('"', '') }) -join '|'
+    $script = @"
+`$ErrorActionPreference = 'Continue'
+`$paths = '$list'.Split('|') | Where-Object { `$_ }
+foreach (`$path in `$paths) {
+  if (-not (Test-Path -LiteralPath `$path)) { continue }
+  takeown /F `$path | Out-Null
+  icacls `$path /reset | Out-Null
+  attrib -R -S -H `$path | Out-Null
+  Remove-Item -LiteralPath `$path -Force -ErrorAction SilentlyContinue
+  if (Test-Path -LiteralPath `$path) { cmd /c "del /f /q ``"`$path``"" | Out-Null }
+}
+"@
+    $file = Join-Path $env:TEMP ('steamhold-elevated-unlock-' + [guid]::NewGuid().ToString('N') + '.ps1')
+    Set-Content -LiteralPath $file -Value $script -Encoding UTF8
+    Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $file
+    ) -Wait | Out-Null
+    Start-Sleep -Milliseconds 400
+    Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+    $still = @()
+    foreach ($path in $Paths) {
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            $still += $path
+        }
+    }
+    return $still
 }
 
 function Stop-BlockedGameProcesses {

@@ -13,15 +13,17 @@ function Get-SteamHoldGameRows {
             $blocked = $blockedMap[[string]$game.AppId]
         }
         $common = Join-Path $game.Library ("steamapps\common\" + $game.InstallDir)
+        $stuckLock = Test-Path -LiteralPath $common -PathType Leaf
+        $isBlocked = [bool](($null -ne $blocked) -or $stuckLock)
         $rows += [pscustomobject]@{
             AppId      = [string]$game.AppId
             Name       = [string]$game.Name
             InstallDir = [string]$game.InstallDir
             Library    = [string]$game.Library
             Path       = [string]$common
-            Blocked    = [bool]($null -ne $blocked)
+            Blocked    = $isBlocked
             BlockedAt  = if ($blocked -and $blocked.blockedAt) { [string]$blocked.blockedAt } else { '' }
-            Status     = if ($blocked) { 'Blocked' } else { 'Open' }
+            Status     = if ($stuckLock -and -not $blocked) { 'Stuck lock' } elseif ($blocked) { 'Blocked' } else { 'Open' }
         }
     }
 
@@ -229,7 +231,7 @@ function Start-SteamHoldUi {
             "Blocked at:  $when"
         ) -join [Environment]::NewLine
         $btnBlock.Enabled = -not $row.Blocked
-        $btnUnblock.Enabled = [bool]$row.Blocked
+        $btnUnblock.Enabled = [bool]$row.Blocked -or (Test-Path -LiteralPath $row.Path -PathType Leaf)
     }
 
     function Refresh-GameList {
@@ -307,21 +309,32 @@ function Start-SteamHoldUi {
             }
             $row = $state.Selected
             $entry = Get-BlockedGame -AppId $row.AppId
-            if (-not $entry) {
-                return
+            $failed = @()
+            if ($entry) {
+                $failed = @(Unlock-BlockedGamePaths -Entry $entry)
+                Remove-BlockedGame -AppId $row.AppId
+            } elseif (Test-Path -LiteralPath $row.Path -PathType Leaf) {
+                if (-not (Unlock-SteamPath -Path $row.Path)) {
+                    $failed = @($row.Path)
+                }
             }
-            $failed = Unlock-BlockedGamePaths -Entry $entry
-            Remove-BlockedGame -AppId $row.AppId
+            if ($failed.Count -gt 0) {
+                $answer = [System.Windows.Forms.MessageBox]::Show(
+                    ("Normal unblock could not delete the lock file.`n`nClick Yes to retry as Administrator (UAC).`n`n" + ($failed -join "`n")),
+                    'steamhold',
+                    'YesNo',
+                    'Warning'
+                )
+                if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
+                    $failed = @(Start-SteamHoldElevatedUnlock -Paths $failed)
+                }
+            }
             Refresh-GameList -KeepAppId $row.AppId
             if ($failed.Count -gt 0) {
-                [System.Windows.Forms.MessageBox]::Show(
-                    ("Unblocked, but this lock file still needs Administrator to delete:`n`n" + ($failed -join "`n")),
-                    'steamhold',
-                    'OK',
-                    'Warning'
-                ) | Out-Null
+                $statusBar.Text = "Still locked on disk: $($row.Name)"
+            } else {
+                $statusBar.Text = "Unblocked $($row.Name)"
             }
-            $statusBar.Text = "Unblocked $($row.Name)"
         })
 
     $btnInstall.Add_Click({
